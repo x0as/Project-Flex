@@ -14,7 +14,7 @@ client = MongoClient(mongodb_uri)
 db = client['currency_db']
 collection = db['fx_balances']
 
-# Flask App for health check or Replit uptime
+# Flask App (for uptime pings or dashboard)
 app = Flask(__name__)
 
 @app.route('/')
@@ -24,7 +24,7 @@ def home():
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
-# Start Flask in a separate thread
+# Start Flask on another thread
 flask_thread = threading.Thread(target=run_flask)
 flask_thread.start()
 
@@ -33,7 +33,13 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Helper Functions
+# Set Bot Status
+@bot.event
+async def on_ready():
+    await bot.change_presence(activity=discord.Game(name="Flexing My Authority"))
+    print(f'Bot is ready! Logged in as {bot.user}')
+
+# Helper functions
 def get_balance(user_id):
     user = collection.find_one({"user_id": user_id})
     if user:
@@ -45,8 +51,9 @@ def get_balance(user_id):
 def set_balance(user_id, amount):
     collection.update_one({"user_id": user_id}, {"$set": {"balance": amount}}, upsert=True)
 
-# Commands
+# Admin-only Commands
 @bot.command()
+@commands.has_permissions(administrator=True)
 async def give(ctx, currency: str, amount: int, member: discord.Member):
     if currency.upper() != "FX":
         await ctx.send("❌ Invalid currency.")
@@ -63,6 +70,7 @@ async def give(ctx, currency: str, amount: int, member: discord.Member):
     await ctx.send(embed=embed)
 
 @bot.command()
+@commands.has_permissions(administrator=True)
 async def remove(ctx, currency: str, amount: int, member: discord.Member):
     if currency.upper() != "FX":
         await ctx.send("❌ Invalid currency.")
@@ -78,6 +86,7 @@ async def remove(ctx, currency: str, amount: int, member: discord.Member):
     embed.add_field(name="New Balance", value=f"{new_balance} FX", inline=False)
     await ctx.send(embed=embed)
 
+# Command to Check FX (Available to all)
 @bot.command(name="FX")
 async def fx(ctx, member: discord.Member = None):
     target = member or ctx.author
@@ -87,6 +96,13 @@ async def fx(ctx, member: discord.Member = None):
     embed.add_field(name="User", value=target.mention, inline=True)
     embed.add_field(name="Balance", value=f"{balance} FX", inline=True)
     await ctx.send(embed=embed)
+
+# Handle permission errors
+@give.error
+@remove.error
+async def permission_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("🚫 You need Administrator permissions to use this command.")
 
 # Run the bot
 bot.run(discord_token)
