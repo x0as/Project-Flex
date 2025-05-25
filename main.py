@@ -1,9 +1,11 @@
 import discord
 from discord.ext import commands
 from pymongo import MongoClient
+from flask import Flask
 import os
+import threading
 
-# Read environment variables directly from the OS
+# Environment Variables
 mongodb_uri = os.environ["MONGODB_URI"]
 discord_token = os.environ["DISCORD_TOKEN"]
 
@@ -12,12 +14,26 @@ client = MongoClient(mongodb_uri)
 db = client['currency_db']
 collection = db['fx_balances']
 
-# Bot Setup
+# Flask App for health check or Replit uptime
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return 'Bot is running!', 200
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+# Start Flask in a separate thread
+flask_thread = threading.Thread(target=run_flask)
+flask_thread.start()
+
+# Discord Bot Setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Helper functions
+# Helper Functions
 def get_balance(user_id):
     user = collection.find_one({"user_id": user_id})
     if user:
