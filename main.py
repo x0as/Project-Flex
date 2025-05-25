@@ -95,7 +95,7 @@ async def leaderboard(interaction: discord.Interaction):
     for i, user_data in enumerate(top_users, start=1):
         member = interaction.guild.get_member(user_data["_id"])
         fx_amount = user_data.get("fx", 0)
-        lines.append(f"**#{i}** {member.mention if member else f'User `{user_data['_id']}`'} - **{fx_amount} FX**")
+        lines.append(f"**#{i}** {member.mention if member else f'User `{user_data['_id']}`"} - **{fx_amount} FX**")
     await interaction.followup.send(
         embed=discord.Embed(title="🏆 FX Leaderboard", description="\n".join(lines), color=0xf1c40f)
     )
