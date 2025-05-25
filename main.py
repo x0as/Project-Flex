@@ -6,7 +6,7 @@ from pymongo import MongoClient
 from flask import Flask
 import threading
 
-# Load environment variables (set manually in deployment env)
+# Load environment variables
 MONGODB_URI = os.environ.get("MONGODB_URI")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
@@ -49,74 +49,96 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# /give Command (Admin only)
+# /give Command
 @bot.tree.command(name="give", description="Give FX to a user (Admin only)")
 @app_commands.describe(user="User to give FX to", amount="Amount of FX to give")
 async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
         return
-
     users.update_one({"_id": user.id}, {"$inc": {"fx": amount}}, upsert=True)
-    await interaction.response.send_message(embed=discord.Embed(
-        title="✅ FX Given",
-        description=f"{user.mention} received **{amount} FX**.",
-        color=0x00ff00
-    ))
+    await interaction.response.send_message(
+        embed=discord.Embed(title="✅ FX Given", description=f"{user.mention} received **{amount} FX**.", color=0x00ff00)
+    )
 
-# /remove Command (Admin only)
+# /remove Command
 @bot.tree.command(name="remove", description="Remove FX from a user (Admin only)")
 @app_commands.describe(user="User to remove FX from", amount="Amount of FX to remove")
 async def remove(interaction: discord.Interaction, user: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
         return
-
     users.update_one({"_id": user.id}, {"$inc": {"fx": -amount}}, upsert=True)
-    await interaction.response.send_message(embed=discord.Embed(
-        title="❌ FX Removed",
-        description=f"{user.mention} lost **{amount} FX**.",
-        color=0xff0000
-    ))
+    await interaction.response.send_message(
+        embed=discord.Embed(title="❌ FX Removed", description=f"{user.mention} lost **{amount} FX**.", color=0xff0000)
+    )
 
-# /fx Command (View own or other's FX)
+# /fx Command
 @bot.tree.command(name="fx", description="Check FX balance")
 @app_commands.describe(user="User to check FX of (optional)")
 async def fx(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
     data = users.find_one({"_id": user.id}) or {"fx": 0}
+    await interaction.response.send_message(
+        embed=discord.Embed(title="💰 FX Balance", description=f"{user.mention} has **{data['fx']} FX**.", color=0x3498db)
+    )
 
-    await interaction.response.send_message(embed=discord.Embed(
-        title="💰 FX Balance",
-        description=f"{user.mention} has **{data['fx']} FX**.",
-        color=0x3498db
-    ))
-
-# /leaderboard Command (Top FX holders)
+# /leaderboard Command
 @bot.tree.command(name="leaderboard", description="Show the top FX holders in the server")
 async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
-    guild = interaction.guild
     top_users = list(users.find().sort("fx", -1).limit(10))
-
     if not top_users:
         await interaction.followup.send("No FX data found.")
         return
-
-    leaderboard_lines = []
+    lines = []
     for i, user_data in enumerate(top_users, start=1):
-        member = guild.get_member(user_data["_id"])
-        if member:
-            leaderboard_lines.append(f"**#{i}** {member.mention} - **{user_data.get('fx', 0)} FX**")
-        else:
-            leaderboard_lines.append(f"**#{i}** Unknown User (`{user_data['_id']}`) - **{user_data.get('fx', 0)} FX**")
-
-    embed = discord.Embed(
-        title="🏆 FX Leaderboard",
-        description="\n".join(leaderboard_lines),
-        color=0xf1c40f
+        member = interaction.guild.get_member(user_data["_id"])
+        fx_amount = user_data.get("fx", 0)
+        lines.append(f"**#{i}** {member.mention if member else f'User `{user_data['_id']}`'} - **{fx_amount} FX**")
+    await interaction.followup.send(
+        embed=discord.Embed(title="🏆 FX Leaderboard", description="\n".join(lines), color=0xf1c40f)
     )
-    await interaction.followup.send(embed=embed)
 
-# Start the bot
+# /redeem Command
+@bot.tree.command(name="redeem", description="Redeem FX for services from Flex Harder")
+@app_commands.describe(service="Which service you want", link="Profile/post link for the order")
+async def redeem(interaction: discord.Interaction, service: str, link: str):
+    user_id = interaction.user.id
+    fx_data = users.find_one({"_id": user_id}) or {"fx": 0}
+    if fx_data["fx"] < 100:
+        await interaction.response.send_message("🚫 You need at least 100 FX to redeem.", ephemeral=True)
+        return
+
+    # Deduct FX
+    users.update_one({"_id": user_id}, {"$inc": {"fx": -100}})
+
+    # Create private order channel
+    guild = interaction.guild
+    category = discord.utils.get(guild.categories, id=1376138636445225081)
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.owner: discord.PermissionOverwrite(view_channel=True),
+        interaction.user: discord.PermissionOverwrite(view_channel=True)
+    }
+
+    channel = await guild.create_text_channel(
+        name=f"redeem-{interaction.user.name}",
+        category=category,
+        overwrites=overwrites
+    )
+
+    await interaction.response.send_message(f"✅ Your order was submitted in {channel.mention}!", ephemeral=True)
+
+    # Send order details
+    await channel.send(
+        content=f"{interaction.user.mention}",
+        embed=discord.Embed(
+            title="🎁 New Redemption Order",
+            description=f"**User:** {interaction.user.mention}\n**Service:** {service}\n**Link:** {link}\n**FX Used:** 100",
+            color=0x00b0f4
+        )
+    )
+
+# Run the bot
 bot.run(DISCORD_TOKEN)
