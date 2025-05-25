@@ -1,108 +1,93 @@
+import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
+from discord import app_commands
 from pymongo import MongoClient
 from flask import Flask
-import os
 import threading
 
-# Environment Variables
-mongodb_uri = os.environ["MONGODB_URI"]
-discord_token = os.environ["DISCORD_TOKEN"]
+# ENVIRONMENT VARIABLES
+MONGODB_URI = os.environ.get("MONGODB_URI")
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
 # MongoDB Setup
-client = MongoClient(mongodb_uri)
-db = client['currency_db']
-collection = db['fx_balances']
+mongo_client = MongoClient(MONGODB_URI)
+db = mongo_client["currency_bot"]
+users = db["users"]
 
-# Flask App (for uptime pings or dashboard)
+# Discord Intents
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+intents.guilds = True
+
+# Bot Setup
+class MyBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.synced = False
+
+    async def on_ready(self):
+        if not self.synced:
+            await self.tree.sync()
+            self.synced = True
+        await self.change_presence(activity=discord.Game(name="Flexing My Authority"))
+        print(f"Logged in as {self.user} (ID: {self.user.id})")
+
+bot = MyBot()
+
+# Flask Web Server
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return 'Bot is running!', 200
+    return "Bot is alive!"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=5000)
 
-# Start Flask on another thread
-flask_thread = threading.Thread(target=run_flask)
-flask_thread.start()
+threading.Thread(target=run_flask).start()
 
-# Discord Bot Setup
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# Set Bot Status
-@bot.event
-async def on_ready():
-    await bot.change_presence(activity=discord.Game(name="Flexing My Authority"))
-    print(f'Bot is ready! Logged in as {bot.user}')
-
-# Helper functions
-def get_balance(user_id):
-    user = collection.find_one({"user_id": user_id})
-    if user:
-        return user['balance']
-    else:
-        collection.insert_one({"user_id": user_id, "balance": 0})
-        return 0
-
-def set_balance(user_id, amount):
-    collection.update_one({"user_id": user_id}, {"$set": {"balance": amount}}, upsert=True)
-
-# Admin-only Commands
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def give(ctx, currency: str, amount: int, member: discord.Member):
-    if currency.upper() != "FX":
-        await ctx.send("❌ Invalid currency.")
+# /give Command
+@bot.tree.command(name="give", description="Give FX to a user (Admin only)")
+@app_commands.describe(user="User to give FX to", amount="Amount of FX to give")
+async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
         return
 
-    current = get_balance(member.id)
-    new_balance = current + amount
-    set_balance(member.id, new_balance)
+    users.update_one({"_id": user.id}, {"$inc": {"fx": amount}}, upsert=True)
+    await interaction.response.send_message(embed=discord.Embed(
+        title="✅ FX Given",
+        description=f"{user.mention} received **{amount} FX**.",
+        color=0x00ff00
+    ))
 
-    embed = discord.Embed(title="💸 FX Given!", color=discord.Color.green())
-    embed.add_field(name="User", value=member.mention, inline=True)
-    embed.add_field(name="Amount", value=f"{amount} FX", inline=True)
-    embed.add_field(name="New Balance", value=f"{new_balance} FX", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def remove(ctx, currency: str, amount: int, member: discord.Member):
-    if currency.upper() != "FX":
-        await ctx.send("❌ Invalid currency.")
+# /remove Command
+@bot.tree.command(name="remove", description="Remove FX from a user (Admin only)")
+@app_commands.describe(user="User to remove FX from", amount="Amount of FX to remove")
+async def remove(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
         return
 
-    current = get_balance(member.id)
-    new_balance = max(0, current - amount)
-    set_balance(member.id, new_balance)
+    users.update_one({"_id": user.id}, {"$inc": {"fx": -amount}}, upsert=True)
+    await interaction.response.send_message(embed=discord.Embed(
+        title="❌ FX Removed",
+        description=f"{user.mention} lost **{amount} FX**.",
+        color=0xff0000
+    ))
 
-    embed = discord.Embed(title="❌ FX Removed", color=discord.Color.red())
-    embed.add_field(name="User", value=member.mention, inline=True)
-    embed.add_field(name="Amount Removed", value=f"{amount} FX", inline=True)
-    embed.add_field(name="New Balance", value=f"{new_balance} FX", inline=False)
-    await ctx.send(embed=embed)
+# /fx Command
+@bot.tree.command(name="fx", description="Check FX balance")
+@app_commands.describe(user="User to check FX of (optional)")
+async def fx(interaction: discord.Interaction, user: discord.Member = None):
+    user = user or interaction.user
+    data = users.find_one({"_id": user.id}) or {"fx": 0}
+    await interaction.response.send_message(embed=discord.Embed(
+        title="💰 FX Balance",
+        description=f"{user.mention} has **{data['fx']} FX**.",
+        color=0x3498db
+    ))
 
-# Command to Check FX (Available to all)
-@bot.command(name="FX")
-async def fx(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    balance = get_balance(target.id)
-
-    embed = discord.Embed(title="💼 FX Balance", color=discord.Color.blue())
-    embed.add_field(name="User", value=target.mention, inline=True)
-    embed.add_field(name="Balance", value=f"{balance} FX", inline=True)
-    await ctx.send(embed=embed)
-
-# Handle permission errors
-@give.error
-@remove.error
-async def permission_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("🚫 You need Administrator permissions to use this command.")
-
-# Run the bot
-bot.run(discord_token)
+bot.run(DISCORD_TOKEN)
