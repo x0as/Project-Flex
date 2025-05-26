@@ -6,7 +6,7 @@ from pymongo import MongoClient
 from flask import Flask
 import threading
 
-# Load environment variables (set manually in deployment env)
+# Load environment variables
 MONGODB_URI = os.environ.get("MONGODB_URI")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
@@ -49,14 +49,13 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# /give Command (Admin only)
+# /give
 @bot.tree.command(name="give", description="Give FX to a user (Admin only)")
 @app_commands.describe(user="User to give FX to", amount="Amount of FX to give")
 async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
         return
-
     users.update_one({"_id": user.id}, {"$inc": {"fx": amount}}, upsert=True)
     await interaction.response.send_message(embed=discord.Embed(
         title="✅ FX Given",
@@ -64,14 +63,13 @@ async def give(interaction: discord.Interaction, user: discord.Member, amount: i
         color=0x00ff00
     ))
 
-# /remove Command (Admin only)
+# /remove
 @bot.tree.command(name="remove", description="Remove FX from a user (Admin only)")
 @app_commands.describe(user="User to remove FX from", amount="Amount of FX to remove")
 async def remove(interaction: discord.Interaction, user: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
         return
-
     users.update_one({"_id": user.id}, {"$inc": {"fx": -amount}}, upsert=True)
     await interaction.response.send_message(embed=discord.Embed(
         title="❌ FX Removed",
@@ -79,20 +77,19 @@ async def remove(interaction: discord.Interaction, user: discord.Member, amount:
         color=0xff0000
     ))
 
-# /fx Command (View own or other's FX)
+# /fx
 @bot.tree.command(name="fx", description="Check FX balance")
 @app_commands.describe(user="User to check FX of (optional)")
 async def fx(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
     data = users.find_one({"_id": user.id}) or {"fx": 0}
-
     await interaction.response.send_message(embed=discord.Embed(
         title="💰 FX Balance",
         description=f"{user.mention} has **{data['fx']} FX**.",
         color=0x3498db
     ))
 
-# /leaderboard Command
+# /leaderboard
 @bot.tree.command(name="leaderboard", description="Show the top FX holders in the server")
 async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -115,19 +112,14 @@ async def leaderboard(interaction: discord.Interaction):
     )
     await interaction.followup.send(embed=embed)
 
-# /redeem Command
+# /redeem
 @bot.tree.command(name="redeem", description="Redeem FX for services from Flex Harder (min 100 FX)")
 @app_commands.describe(
     service="Choose your service",
     platform="Platform (Instagram, TikTok, YouTube, etc.)",
     link="Link to your profile or post",
 )
-async def redeem(
-    interaction: discord.Interaction,
-    service: str,
-    platform: str,
-    link: str
-):
+async def redeem(interaction: discord.Interaction, service: str, platform: str, link: str):
     user_id = interaction.user.id
     user_data = users.find_one({"_id": user_id}) or {"fx": 0}
 
@@ -141,7 +133,7 @@ async def redeem(
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        interaction.guild.owner: discord.PermissionOverwrite(read_messages=True),
+        guild.owner: discord.PermissionOverwrite(read_messages=True),
         interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
     }
 
@@ -161,5 +153,5 @@ async def redeem(
 
     await interaction.response.send_message(f"✅ Redeemed! Check your private channel: {private_channel.mention}", ephemeral=True)
 
-# Run the bot
+# Start the bot
 bot.run(DISCORD_TOKEN)
