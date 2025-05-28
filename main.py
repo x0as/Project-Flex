@@ -93,7 +93,7 @@ async def fx(interaction: discord.Interaction, user: discord.Member = None):
 # /leaderboard command
 @bot.tree.command(name="leaderboard", description="Show the top FX holders")
 async def leaderboard(interaction: discord.Interaction):
-    top_users = list(users.find().sort("fx", -1).limit(10))
+    top_users = list(users.find().sort("fx", -1).limit(15))
     if not top_users:
         await interaction.response.send_message("No FX data found.")
         return
