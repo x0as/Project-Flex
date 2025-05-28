@@ -110,6 +110,20 @@ async def leaderboard(interaction: discord.Interaction):
         description="\n".join(lines),
         color=0xf1c40f
     ))
+# /reset command
+@bot.tree.command(name="reset", description="Reset a user's FX to 0 (Admin only)")
+@app_commands.describe(user="User whose FX will be reset to 0")
+async def reset(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 You need admin permissions to use this command.", ephemeral=True)
+        return
+
+    users.update_one({"_id": user.id}, {"$set": {"fx": 0}}, upsert=True)
+    await interaction.response.send_message(embed=discord.Embed(
+        title="🔄 FX Reset",
+        description=f"{user.mention}'s FX has been reset to **0**.",
+        color=0x95a5a6
+    ))
 
 # /redeem command
 @bot.tree.command(name="redeem", description="Redeem FX for services from Flex Harder (min 100 FX)")
