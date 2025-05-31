@@ -18,6 +18,7 @@ mongo_client = MongoClient(MONGODB_URI)
 db = mongo_client["currency_bot"]
 users = db["users"]
 history = db["fx_history"]
+settings = db["settings"]  # For storing log channel
 
 # Flask for Uptime
 app = Flask(__name__)
@@ -51,6 +52,20 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
+# Helper: Check if member has the required role
+def has_role(member, role_id):
+    return any(role.id == role_id for role in getattr(member, "roles", []))
+
+# Helper: Send log message to logs channel
+async def send_log(guild, message):
+    config = settings.find_one({"_id": "log_channel"})
+    if config:
+        channel_id = config.get("channel_id")
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                await channel.send(message)
+
 # FX Historical Rate Tracker (for internal use)
 def update_fx_history():
     total_fx = sum(user.get("fx", 0) for user in users.find())
@@ -70,11 +85,20 @@ async def give(interaction: discord.Interaction, user: discord.Member, amount: i
         return
     users.update_one({"_id": user.id}, {"$inc": {"fx": amount}}, upsert=True)
     update_fx_history()
+    # Log in fx_history
+    history.insert_one({
+        "timestamp": datetime.utcnow(),
+        "user_id": user.id,
+        "amount": amount,
+        "reason": "give",
+        "from_user": interaction.user.id,
+    })
     await interaction.response.send_message(embed=discord.Embed(
         title="✅ FX Given",
         description=f"{user.mention} received **{amount} FX**.",
         color=0x00ff00
     ))
+    await send_log(interaction.guild, f"🟢 {interaction.user.mention} gave {amount} FX to {user.mention}")
 
 # /remove command
 @bot.tree.command(name="remove", description="Remove FX from a user (Admin only)")
@@ -85,11 +109,20 @@ async def remove(interaction: discord.Interaction, user: discord.Member, amount:
         return
     users.update_one({"_id": user.id}, {"$inc": {"fx": -amount}}, upsert=True)
     update_fx_history()
+    # Log in fx_history
+    history.insert_one({
+        "timestamp": datetime.utcnow(),
+        "user_id": user.id,
+        "amount": -amount,
+        "reason": "remove",
+        "from_user": interaction.user.id,
+    })
     await interaction.response.send_message(embed=discord.Embed(
         title="❌ FX Removed",
         description=f"{user.mention} lost **{amount} FX**.",
         color=0xff0000
     ))
+    await send_log(interaction.guild, f"🔴 {interaction.user.mention} removed {amount} FX from {user.mention}")
 
 # /fx command
 @bot.tree.command(name="fx", description="Check FX balance")
@@ -131,11 +164,20 @@ async def reset(interaction: discord.Interaction, user: discord.Member):
         return
     users.update_one({"_id": user.id}, {"$set": {"fx": 0}}, upsert=True)
     update_fx_history()
+    # Log in fx_history
+    history.insert_one({
+        "timestamp": datetime.utcnow(),
+        "user_id": user.id,
+        "amount": 0,
+        "reason": "reset",
+        "from_user": interaction.user.id,
+    })
     await interaction.response.send_message(embed=discord.Embed(
         title="🔄 FX Reset",
         description=f"{user.mention}'s FX has been reset to **0**.",
         color=0x95a5a6
     ))
+    await send_log(interaction.guild, f"🔄 {interaction.user.mention} reset {user.mention}'s FX to 0")
 
 # /redeem command
 @bot.tree.command(name="redeem", description="Redeem FX for services from Flex Harder (min 100 FX)")
@@ -158,6 +200,17 @@ async def redeem(interaction: discord.Interaction, service: str, platform: str, 
     private_channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
     users.update_one({"_id": user_id}, {"$inc": {"fx": -100}}, upsert=True)
     update_fx_history()
+    # Log in fx_history
+    history.insert_one({
+        "timestamp": datetime.utcnow(),
+        "user_id": user_id,
+        "amount": -100,
+        "reason": "redeem",
+        "service": service,
+        "platform": platform,
+        "link": link,
+        "from_user": interaction.user.id,
+    })
     await private_channel.send(
         f"🎟️ **New Redemption Request**\n"
         f"👤 User: {interaction.user.mention}\n"
@@ -170,6 +223,7 @@ async def redeem(interaction: discord.Interaction, service: str, platform: str, 
         f"✅ Redeemed! Check your private channel: {private_channel.mention}",
         ephemeral=True
     )
+    await send_log(interaction.guild, f"🎟️ {interaction.user.mention} redeemed 100 FX for {service} ({platform}) - {link}")
 
 # /currency_rate command
 @bot.tree.command(name="currency_rate", description="View FX value per invite over time as a graph")
@@ -180,8 +234,12 @@ async def currency_rate(interaction: discord.Interaction):
         await interaction.followup.send("📉 No FX history available yet.")
         return
 
-    timestamps = [rec["timestamp"] for rec in records]
-    values = [rec["value_per_invite"] for rec in records]
+    timestamps = [rec["timestamp"] for rec in records if "value_per_invite" in rec]
+    values = [rec["value_per_invite"] for rec in records if "value_per_invite" in rec]
+
+    if not timestamps or not values:
+        await interaction.followup.send("📉 No FX history available yet.")
+        return
 
     plt.figure(figsize=(10, 5))
     plt.plot(timestamps, values, marker="o", linestyle="-", color="blue")
@@ -198,6 +256,60 @@ async def currency_rate(interaction: discord.Interaction):
 
     file = discord.File(fp=buf, filename="fx_currency_rate.png")
     await interaction.followup.send(content="📈 Historical FX Currency Rate:", file=file)
+
+# /history command (role restricted)
+@bot.tree.command(name="history", description="Show a user's FX transaction history (1376114172181483582 only)")
+@app_commands.describe(user="User whose FX transaction history to show")
+async def history_cmd(interaction: discord.Interaction, user: discord.Member):
+    # Only allow users with the specific role ID
+    if not has_role(interaction.user, 1376114172181483582):
+        await interaction.response.send_message("🚫 You don't have permission to use this command.", ephemeral=True)
+        return
+
+    # Get the user's transaction history (last 20)
+    records = list(history.find({"user_id": user.id}).sort("timestamp", -1).limit(20))
+    if not records:
+        await interaction.response.send_message(f"No FX transaction history found for {user.mention}.", ephemeral=True)
+        return
+
+    lines = []
+    for rec in records:
+        date = rec.get("timestamp")
+        if isinstance(date, datetime):
+            date = date.strftime('%Y-%m-%d %H:%M')
+        amount = rec.get("amount", 0)
+        reason = rec.get("reason", "Unknown")
+        from_user = rec.get("from_user", None)
+        service = rec.get("service", "")
+        platform = rec.get("platform", "")
+        link = rec.get("link", "")
+        # Compose message
+        base = f"{date}: `{amount:+} FX` via `{reason}`"
+        if reason == "redeem":
+            base += f" for `{service}` on `{platform}` (<{link}>)"
+        if from_user:
+            base += f" (by <@{from_user}>)"
+        lines.append(base)
+
+    await interaction.response.send_message(
+        embed=discord.Embed(
+            title=f"📜 FX History for {user.display_name}",
+            description="\n".join(lines),
+            color=0x7289da
+        ),
+        ephemeral=True
+    )
+
+# /logs set #channel command (role restricted)
+@bot.tree.command(name="logs", description="Configure log channel (1376114172181483582 only)")
+@app_commands.describe(channel="Channel to set as logs channel")
+async def logs(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not has_role(interaction.user, 1376114172181483582):
+        await interaction.response.send_message("🚫 You don't have permission to use this command.", ephemeral=True)
+        return
+    # Save the logs channel ID in settings
+    settings.update_one({"_id": "log_channel"}, {"$set": {"channel_id": channel.id}}, upsert=True)
+    await interaction.response.send_message(f"✅ Logs channel set to {channel.mention}", ephemeral=True)
 
 # Run the bot
 bot.run(DISCORD_TOKEN)
