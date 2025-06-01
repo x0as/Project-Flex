@@ -258,11 +258,12 @@ async def currency_rate(interaction: discord.Interaction):
     await interaction.followup.send(content="📈 Historical FX Currency Rate:", file=file)
 
 # /history command (role restricted)
-@bot.tree.command(name="history", description="Show a user's FX transaction history (1376114172181483582 only)")
+@bot.tree.command(name="history", description="Show a user's FX transaction history (allowed roles only)")
 @app_commands.describe(user="User whose FX transaction history to show")
 async def history_cmd(interaction: discord.Interaction, user: discord.Member):
-    # Only allow users with the specific role ID
-    if not has_role(interaction.user, 1376114172181483582):
+    # Allow users with either of the two specific role IDs
+    allowed_roles = [1376114172181483582, 1376114369842253884]
+    if not any(has_role(interaction.user, role_id) for role_id in allowed_roles):
         await interaction.response.send_message("🚫 You don't have permission to use this command.", ephemeral=True)
         return
 
